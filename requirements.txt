@@ -1,4 +1,8 @@
 python-telegram-bot
-pydantic
+pandas
+yfinance
+sqlalchemy
 pydantic-settings
 requests
+python-dotenv
+numpy
