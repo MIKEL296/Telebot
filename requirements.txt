@@ -3,6 +3,8 @@ pandas>=2.2.0
 numpy>=1.26.0
 yfinance>=0.2.40
 requests>=2.31.0
+pydantic-settings
+
 
 # Technical Indicators & Math
 scipy>=1.12.0
