@@ -1,20 +1,15 @@
+# ==========================================
+# FILE: telegram_bot.py
+# ==========================================
 import logging
 import sys
 import asyncio
-import importlib
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from config import settings
 
-import broker_gateway
-importlib.reload(broker_gateway)
-from broker_gateway import BrokerGateway
-
-import data_engine
-importlib.reload(data_engine)
 from data_engine import DataEngine
-
-from database import SessionLocal, TradeLog
+from database import SessionLocal, TradeLog, init_db
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -22,35 +17,43 @@ if sys.platform == 'win32':
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-gateway = BrokerGateway()
 engine = DataEngine()
-
-# Set Lot size to 5.0
 LOT_SIZE = 5.0
 
 def is_admin(update: Update) -> bool:
     return update.effective_user.id == settings.TELEGRAM_ADMIN_ID
 
+def calculate_trade_duration(interval_minutes: int, target_tp_atr_multiple: float = 4.0) -> str:
+    estimated_candles = max(3, int(target_tp_atr_multiple * 1.5))
+    total_minutes = estimated_candles * interval_minutes
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    if hours > 0:
+        return f"{hours}h {minutes}m" if minutes > 0 else f"{hours}h"
+    return f"{minutes} mins"
+
+def format_quick_price(value: float, symbol: str) -> str:
+    if value is None:
+        return "N/A"
+    if symbol in ["XAUUSD", "BTCUSD"]:
+        return f"${round(value):,}"
+    else:  # EURUSD / Forex
+        return f"${value:.4f}"
+
+def calculate_projected_profit(entry: float, tp: float, symbol: str, action: str, qty: float = 5.0) -> float:
+    price_diff = abs(tp - entry)
+    if symbol == "XAUUSD":
+        return price_diff * qty * 100
+    elif symbol == "EURUSD":
+        return price_diff * qty * 100000
+    else:  # BTCUSD
+        return price_diff * qty
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
-    keyboard = [['/balance', '/execute'], ['/read', '/logs']]
+    keyboard = [['/read', '/predict'], ['/logs']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(" * FX signal Scalping Terminal Online.*", parse_mode="Markdown", reply_markup=reply_markup)
-
-async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update): return
-    account_data = await asyncio.to_thread(gateway.get_account_details)
-    
-    if account_data["status"] == "success":
-        msg = (
-            f"💰 *Portfolio Balance Metrics:*\n\n"
-            f"• *Cash Balance:* ${account_data['cash']:,.2f}\n"
-            f"• *Total Equity:* ${account_data['equity']:,.2f}\n"
-            f"• *Buying Power:* ${account_data['buying_power']:,.2f}"
-        )
-    else:
-        msg = "⚠️ *Broker Gateway Connection Offline.*"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text("📡 *FX Signal Predictor Terminal Online.*", parse_mode="Markdown", reply_markup=reply_markup)
 
 async def read_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
@@ -65,18 +68,18 @@ async def read_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             df_15 = await asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="15m")
             c_15, r_15, m_15, p_m_15, e_15 = df_15['close'].iloc[-1], df_15['rsi'].iloc[-1], df_15['macd_histogram'].iloc[-1], df_15['macd_histogram'].iloc[-2], df_15['ema_50'].iloc[-1]
             if r_15 < 35 and m_15 > p_m_15 and c_15 > e_15:
-                cards_to_send.append(("🥇 MAJ_BUY", f"🟢 *STRICT CONFLUENCE BUY:* Oversold at {r_15:.1f} breaking up. Highly decisive setup!"))
+                cards_to_send.append(("🥇 MAJ_BUY", f"🟢 *STRICT CONFLUENCE BUY:* Oversold at {r_15:.1f} breaking up."))
             elif r_15 > 65 and m_15 < p_m_15 and c_15 < e_15:
-                cards_to_send.append(("🥇 MAJ_SELL", f"🔴 *STRICT CONFLUENCE SELL:* Overbought at {r_15:.1f} pivoting down. Highly decisive setup!"))
+                cards_to_send.append(("🥇 MAJ_SELL", f"🔴 *STRICT CONFLUENCE SELL:* Overbought at {r_15:.1f} pivoting down."))
         except Exception: pass
 
         try:
             df_5 = await asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="5m")
             c_5, r_5, m_5, p_m_5 = df_5['close'].iloc[-1], df_5['rsi'].iloc[-1], df_5['macd_histogram'].iloc[-1], df_5['macd_histogram'].iloc[-2]
             if r_5 < 45 and m_5 > p_m_5:
-                cards_to_send.append(("⚡ SCALP_BUY", f"🚀 *MICRO SCALP BUY:* Lenient momentum flip caught on 5m chart (RSI: {r_5:.1f})."))
+                cards_to_send.append(("⚡ SCALP_BUY", f"🚀 *MICRO SCALP BUY:* Lenient momentum flip on 5m chart (RSI: {r_5:.1f})."))
             elif r_5 > 55 and m_5 < p_m_5:
-                cards_to_send.append(("⚡ SCALP_SELL", f"🔥 *MICRO SCALP SELL:* Lenient momentum flip caught on 5m chart (RSI: {r_5:.1f})."))
+                cards_to_send.append(("⚡ SCALP_SELL", f"🔥 *MICRO SCALP SELL:* Lenient momentum flip on 5m chart (RSI: {r_5:.1f})."))
         except Exception: pass
 
         if not cards_to_send:
@@ -89,9 +92,10 @@ async def read_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
     await status_message.delete()
 
-async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates a high-conviction signal prediction with rapid, rounded input values."""
     if not is_admin(update): return
-    status_message = await update.message.reply_text("⚡ Interrogating terminal structures for entry points...")
+    status_message = await update.message.reply_text("⚡ Interrogating market structures for high-margin signal predictions...")
     watch_list = ["GC=F", "BTC-USD", "EURUSD=X"]
     chosen_trade = None
     
@@ -100,10 +104,10 @@ async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             df = await asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="15m")
             c, r, m, p_m, e = df['close'].iloc[-1], df['rsi'].iloc[-1], df['macd_histogram'].iloc[-1], df['macd_histogram'].iloc[-2], df['ema_50'].iloc[-1]
             if r < 35 and m > p_m and c > e:
-                chosen_trade = {"ticker": ticker, "action": "buy", "mode": "STRICT MACD", "price": c}
+                chosen_trade = {"ticker": ticker, "action": "buy", "mode": "STRICT CONFLUENCE", "price": c, "interval": 15, "tier": "HIGH"}
                 break
             elif r > 65 and m < p_m and c < e:
-                chosen_trade = {"ticker": ticker, "action": "sell", "mode": "STRICT MACD", "price": c}
+                chosen_trade = {"ticker": ticker, "action": "sell", "mode": "STRICT CONFLUENCE", "price": c, "interval": 15, "tier": "HIGH"}
                 break
         except Exception: pass
 
@@ -113,177 +117,182 @@ async def execute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 df = await asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="5m")
                 c, r, m, p_m = df['close'].iloc[-1], df['rsi'].iloc[-1], df['macd_histogram'].iloc[-1], df['macd_histogram'].iloc[-2]
                 if r < 45 and m > p_m:
-                    chosen_trade = {"ticker": ticker, "action": "buy", "mode": "LENIENT SCALP", "price": c}
+                    chosen_trade = {"ticker": ticker, "action": "buy", "mode": "MICRO SCALP", "price": c, "interval": 5, "tier": "MODERATE"}
                     break
                 elif r > 55 and m < p_m:
-                    chosen_trade = {"ticker": ticker, "action": "sell", "mode": "LENIENT SCALP", "price": c}
+                    chosen_trade = {"ticker": ticker, "action": "sell", "mode": "MICRO SCALP", "price": c, "interval": 5, "tier": "MODERATE"}
                     break
             except Exception: pass
 
     await status_message.delete()
     
     if not chosen_trade:
-        await update.message.reply_text("🛑 *System Guard:* Absolute zero entries found across all lenient filters.")
+        await update.message.reply_text("🛑 *System Guard:* Absolute zero signal entries found across all filters.")
         return
 
-    exness_symbol = "XAUUSDm" if chosen_trade["ticker"] == "GC=F" else ("BTCUSDm" if chosen_trade["ticker"] == "BTC-USD" else "EURUSDm")
+    asset_symbol = "XAUUSD" if chosen_trade["ticker"] == "GC=F" else ("BTCUSD" if chosen_trade["ticker"] == "BTC-USD" else "EURUSD")
     display_name = "GOLD" if chosen_trade["ticker"] == "GC=F" else ("BITCOIN" if chosen_trade["ticker"] == "BTC-USD" else "EUR / USD")
 
     try:
-        # Fetch data frame again to calculate structural ATR bounds safely
-        df = await asyncio.to_thread(engine.get_analyzed_dataframe, chosen_trade["ticker"], interval="15m")
+        interval = chosen_trade.get("interval", 15)
+        tier = chosen_trade.get("tier", "MODERATE")
+        df = await asyncio.to_thread(engine.get_analyzed_dataframe, chosen_trade["ticker"], interval=f"{interval}m")
         latest_atr = df['atr'].iloc[-1]
         latest_close = chosen_trade["price"]
 
-        if chosen_trade["action"] == "buy":
-            sl_price = latest_close - (1.5 * latest_atr)
-            tp_price = latest_close + (3.0 * latest_atr)
-        else:
-            sl_price = latest_close + (1.5 * latest_atr)
-            tp_price = latest_close - (3.0 * latest_atr)
+        sl_multiplier = 1.5
+        tp_multiplier = 4.0 if tier == "HIGH" else 3.0
 
-        precision = 2 if exness_symbol == "XAUUSDm" else (3 if exness_symbol == "BTCUSDm" else 5)
+        if chosen_trade["action"] == "buy":
+            sl_price = latest_close - (sl_multiplier * latest_atr)
+            tp_price = latest_close + (tp_multiplier * latest_atr)
+        else:
+            sl_price = latest_close + (sl_multiplier * latest_atr)
+            tp_price = latest_close - (tp_multiplier * latest_atr)
+
+        precision = 0 if asset_symbol in ["XAUUSD", "BTCUSD"] else 4
         sl_price = round(sl_price, precision)
         tp_price = round(tp_price, precision)
-
-        # Offload order execution
-        trade_result = await asyncio.to_thread(
-            gateway.execute_market_order, 
-            symbol=exness_symbol, 
-            qty=LOT_SIZE, 
-            side=chosen_trade["action"],
-            sl=sl_price,
-            tp=tp_price
-        )
         
-        if trade_result["status"] == "success":
-            acct_info = await asyncio.to_thread(gateway.get_account_details)
-            running_bal = acct_info["cash"] if acct_info["status"] == "success" else 0.0
+        potential_profit_usd = calculate_projected_profit(latest_close, tp_price, asset_symbol, chosen_trade["action"], LOT_SIZE)
+        duration_est = calculate_trade_duration(interval_minutes=interval, target_tp_atr_multiple=tp_multiplier)
 
-            db = SessionLocal()
-            try:
-                log = TradeLog(
-                    symbol=exness_symbol,
-                    action=chosen_trade['action'].upper(),
-                    mode=chosen_trade['mode'],
-                    quantity=LOT_SIZE,
-                    entry_price=chosen_trade['price'],
-                    pnl=0.0,
-                    running_balance=running_bal
-                )
-                db.add(log)
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                print(f"Database error writing log: {e}")
-            finally:
-                db.close()
+        profit_tag = "🔥 HIGH PROFIT PREDICTION" if tier == "HIGH" else "⚡ MODERATE / SCALP PREDICTION"
 
-            await update.message.reply_text(
-                f"✅ *MANUAL TRADE IMPLEMENTED*\n\n"
-                f"• *Asset:* {display_name} ({exness_symbol})\n"
-                f"• *Action:* {chosen_trade['action'].upper()}\n"
-                f"• *Price:* ${chosen_trade['price']:,.2f}\n"
-                f"• *Stop Loss:* ${sl_price:,.2f}\n"
-                f"• *Take Profit:* ${tp_price:,.2f}\n"
-                f"• *Lot Size:* {LOT_SIZE} lots\n"
-                f"• *Status:* Guarded by active broker-side brackets.", 
-                parse_mode="Markdown"
+        db = SessionLocal()
+        try:
+            log = TradeLog(
+                symbol=asset_symbol,
+                action=chosen_trade['action'].upper(),
+                mode=chosen_trade['mode'],
+                quantity=LOT_SIZE,
+                entry_price=latest_close,
+                stop_loss=sl_price,
+                take_profit=tp_price,
+                estimated_duration=duration_est,
+                pnl=0.0
             )
-        else:
-            await update.message.reply_text(f"❌ *Broker Rejection:* {trade_result.get('message')}")
+            db.add(log)
+            db.commit()
+            db.refresh(log)
+            signal_id = log.id
+        except Exception as e:
+            db.rollback()
+            print(f"Database error writing log: {e}")
+            signal_id = "N/A"
+        finally:
+            db.close()
+
+        entry_formatted = format_quick_price(latest_close, asset_symbol)
+        sl_formatted = format_quick_price(sl_price, asset_symbol)
+        tp_formatted = format_quick_price(tp_price, asset_symbol)
+
+        await update.message.reply_text(
+            f"✅ *SIGNAL PREDICTION RECORDED*\n"
+            f"🏆 *Rating:* {profit_tag}\n\n"
+            f"• *Asset:* {display_name} ({asset_symbol})\n"
+            f"• *Action:* {chosen_trade['action'].upper()}\n"
+            f"• *Entry Price:* {entry_formatted}\n"
+            f"⚡ *Quick SL:* `{sl_formatted}`\n"
+            f"⚡ *Quick TP:* `{tp_formatted}`\n"
+            f"💵 *Target Profit:* +${potential_profit_usd:,.2f} (5.0 Lots)\n"
+            f"⏳ *Est. Duration:* ~{duration_est}\n"
+            f"🆔 *Signal ID:* #{signal_id}\n\n"
+            f"💡 _Tip: Tap the values in code blocks to copy them instantly!_", 
+            parse_mode="Markdown"
+        )
     except Exception as err:
-        await update.message.reply_text(f"⚠️ Gateway error: {str(err)}")
+        await update.message.reply_text(f"⚠️ Signal error: {str(err)}")
 
 async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Non-blocking, fast historical log renderer."""
     if not is_admin(update): return
-    await update.message.reply_text("📋 Compiling real-time trade history telemetry...")
+    status_msg = await update.message.reply_text("📋 Compiling signal history...")
     
-    account_data = await asyncio.to_thread(gateway.get_account_details)
-    live_bal = account_data['cash'] if account_data["status"] == "success" else 0.0
-
     db = SessionLocal()
     try:
-        recent_logs = db.query(TradeLog).order_by(TradeLog.id.desc()).limit(6).all()
+        recent_logs = db.query(TradeLog).order_by(TradeLog.id.desc()).limit(8).all()
         if not recent_logs:
-            await update.message.reply_text("📝 *History Matrix Status:* Empty. No trades recorded yet.", parse_mode="Markdown")
+            await status_msg.edit_text("📝 *Signal History Matrix:* Empty. No predictions recorded yet.", parse_mode="Markdown")
             return
             
         log_lines = [
-            f"📊 *OFFICIAL FINANCIAL TRADE LOGS*\n"
-            f"💰 *Current Real-Time Balance:* ${live_bal:,.2f}\n"
-            f"───────────────────\n"
+            f"📊 *HISTORICAL SIGNAL PREDICTIONS*\n"
+            f"───────────────────"
         ]
         
         for entry in recent_logs:
-            ticker_map = {"XAUUSDm": "GC=F", "BTCUSDm": "BTC-USD", "EURUSDm": "EURUSD=X"}
+            ticker_map = {"XAUUSD": "GC=F", "BTCUSD": "BTC-USD", "EURUSD": "EURUSD=X"}
             ticker = ticker_map.get(entry.symbol)
+            pnl_amount = entry.pnl if entry.pnl is not None else 0.0
             
-            pnl_amount = 0.0
-            pnl_string = "🔵 Status: Current Price Loading..."
-            
+            # Non-blocking fast price fetch with 2-second strict timeout
             if ticker:
                 try:
-                    df = await asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="5m")
+                    df = await asyncio.wait_for(
+                        asyncio.to_thread(engine.get_analyzed_dataframe, ticker, interval="5m"),
+                        timeout=2.0
+                    )
                     current_price = df['close'].iloc[-1]
                     price_difference = current_price - entry.entry_price
+                    qty = entry.quantity if entry.quantity else LOT_SIZE
                     
                     if entry.action.upper() == "BUY":
-                        pnl_amount = price_difference * entry.quantity
+                        pnl_amount = price_difference * qty
                     elif entry.action.upper() == "SELL":
-                        pnl_amount = -price_difference * entry.quantity
+                        pnl_amount = -price_difference * qty
                     
-                    if entry.symbol == "XAUUSDm":
-                        pnl_amount *= 100  # Standard Gold Contract Multiplier
-                    elif entry.symbol == "EURUSDm":
-                        pnl_amount *= 100000  # Standard Lot Size Multiplier
+                    if entry.symbol == "XAUUSD":
+                        pnl_amount *= 100
+                    elif entry.symbol == "EURUSD":
+                        pnl_amount *= 100000
                     
                     entry.pnl = pnl_amount
                     db.add(entry)
                     db.commit()
-                    
-                except Exception as calc_err:
-                    print(f"Error calculating real-time PnL: {calc_err}")
-                    pnl_amount = entry.pnl
-            
+                except Exception:
+                    # Fallback cleanly if network times out
+                    pnl_amount = entry.pnl if entry.pnl is not None else 0.0
+
             if pnl_amount > 0:
-                pnl_string = f"🟢 Profit Gained: +${pnl_amount:,.2f}"
+                pnl_string = f"🟢 Floating Gain: +${pnl_amount:,.2f}"
             elif pnl_amount < 0:
-                pnl_string = f"🔴 Loss Incurred: -${abs(pnl_amount):,.2f}"
+                pnl_string = f"🔴 Floating Drawdown: -${abs(pnl_amount):,.2f}"
             else:
-                pnl_string = f"🔵 Status: Flat / Break-Even ($0.00)"
+                pnl_string = f"🔵 Status: At Entry Level ($0.00)"
+
+            entry_disp = format_quick_price(entry.entry_price, entry.symbol)
+            sl_disp = format_quick_price(getattr(entry, 'stop_loss', None), entry.symbol)
+            tp_disp = format_quick_price(getattr(entry, 'take_profit', None), entry.symbol)
+            duration_disp = getattr(entry, 'estimated_duration', None) or "~1h"
 
             log_lines.append(
-                f"🆔 *Ticket ID #{entry.id}* | *{entry.symbol}*\n"
+                f"🆔 *Signal ID #{entry.id}* | *{entry.symbol}*\n"
                 f" ├ *Type:* {entry.action} ({entry.mode})\n"
-                f" ├ *Entry Price:* ${entry.entry_price:,.2f}\n"
-                f" ├ {pnl_string}\n"
-                f" └ *Post-Trade Balance:* ${entry.running_balance:,.2f}\n"
+                f" ├ *Entry:* {entry_disp}\n"
+                f" ├ *SL:* `{sl_disp}` | *TP:* `{tp_disp}`\n"
+                f" ├ *Est. Time:* ~{duration_disp}\n"
+                f" └ {pnl_string}\n"
                 f"───────────────────"
             )
             
-        await update.message.reply_text("\n".join(log_lines), parse_mode="Markdown")
+        await status_msg.edit_text("\n".join(log_lines), parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"❌ Storage execution pipeline error: {str(e)}")
+        logger.error(f"Logs exception: {e}")
+        await status_msg.edit_text(f"❌ Storage error: {str(e)}")
     finally:
         db.close()
 
 def main():
-    from database import init_db
-    try:
-        init_db()
-        print("✅ Core structural database verification passed.")
-    except Exception as e:
-        print(f"⚠️ Synchronization pass: {e}")
+    init_db()
 
     app = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).connect_timeout(30.0).build()
     app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("balance", balance_command))
-    app.add_handler(CommandHandler("execute", execute_command))
+    app.add_handler(CommandHandler("predict", predict_command))
     app.add_handler(CommandHandler("read", read_command))
     app.add_handler(CommandHandler("logs", logs_command))
     
-    print("🤖 Telemetry Performance Interface running... Press Ctrl+C to stop.")
+    print("🤖 Telegram Signal Interface running... Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

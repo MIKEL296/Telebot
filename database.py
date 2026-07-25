@@ -19,17 +19,18 @@ class TradeLog(Base):
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     symbol = Column(String, index=True)
     action = Column(String)            # BUY / SELL
-    mode = Column(String)              # STRICT MACD / LENIENT SCALP
-    quantity = Column(Float)
-    entry_price = Column(Float)
-    exit_price = Column(Float, nullable=True)
-    pnl = Column(Float, default=0.0)   
+    mode = Column(String)              # STRICT CONFLUENCE / LENIENT SCALP
+    quantity = Column(Float, default=5.0)
+    entry_price = Column(Float)        # Price predicted at time of signal
+    stop_loss = Column(Float)          # Suggested SL
+    take_profit = Column(Float)        # Suggested TP
+    estimated_duration = Column(String)# Expected duration (e.g. '1h 30m')
+    pnl = Column(Float, default=0.0)   # Dynamic floating PnL tracking prediction accuracy
     running_balance = Column(Float, nullable=True)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
 
 if __name__ == "__main__":
-    print("Testing structural database synchronization schema tables...")
     init_db()
-    print("✅ Local SQLite structures initialized successfully without attribute conflicts.")
+    print("✅ Signal database tables successfully verified.")

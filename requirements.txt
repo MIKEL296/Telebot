@@ -1,27 +1,4 @@
-# Core & Data Engine
-pandas>=2.2.0
-numpy>=1.26.0
-yfinance>=0.2.40
-requests>=2.31.0
+python-telegram-bot
+pydantic
 pydantic-settings
-
-
-# Technical Indicators & Math
-scipy>=1.12.0
-
-# Database
-SQLAlchemy>=2.0.0
-psycopg2-binary>=2.9.9
-
-# Broker Gateway (Example: Interactive Brokers & Alpaca)
-alpaca-py>=0.20.0
-ib-insync>=0.9.86
-
-# User Interface & Bot
-python-telegram-bot>=21.0
-streamlit>=1.32.0
-plotly>=5.19.0
-
-# Environment & Configuration
-python-dotenv>=1.0.1
-pydantic>=2.6.0
+requests
