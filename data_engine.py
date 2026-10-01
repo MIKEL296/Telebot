@@ -17,7 +17,11 @@ class DataEngine:
         if df.empty:
             raise ValueError(f"No market data returned for asset symbol: {ticker}")
             
-        df.columns = [col[0].lower() if isinstance(col, tuple) else col.lower() for col in df.columns]
+        # Flatten MultiIndex columns if present from yfinance
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [col[0].lower() for col in df.columns]
+        else:
+            df.columns = [str(col).lower() for col in df.columns]
         
         df = calculate_rsi(df, period=14)
         df = calculate_macd(df, fast_period=12, slow_period=26, signal_period=9)
