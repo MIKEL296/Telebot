@@ -1,32 +1,28 @@
-# ==========================================
-# FILE: database.py
-# ==========================================
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Column, Integer, Float, String, Boolean, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime
-from config import settings
 
-engine = create_engine(
-    settings.DATABASE_URL, 
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
-)
+DATABASE_URL = "sqlite:///bot_database.db"
 
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-class TradeLog(Base):
-    __tablename__ = "trade_logs"
-
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String, index=True)
-    action = Column(String)
-    mode = Column(String)
-    quantity = Column(Float, default=5.0)
-    entry_price = Column(Float)
-    stop_loss = Column(Float, nullable=True)
-    take_profit = Column(Float, nullable=True)
-    estimated_duration = Column(String, nullable=True)
-    pnl = Column(Float, default=0.0)
+    auto_trade_enabled = Column(Boolean, default=False)
+    target_goal = Column(Float, default=0.0)
+
+class TradeHistory(Base):
+    __tablename__ = "trade_history"
+    id = Column(Integer, primary_key=True, index=True)
+    ticket = Column(Integer, nullable=False)
+    symbol = Column(String, nullable=False)
+    side = Column(String, nullable=False)
+    qty = Column(Float, nullable=False)
+    price = Column(Float, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 def init_db():
